@@ -27,6 +27,7 @@ LightTurnOffTrigger = light_ns.class_('LightTurnOffTrigger', automation.Trigger.
 
 # Effects
 LightEffect = light_ns.class_('LightEffect')
+PulseLightEffect = light_ns.class_('PulseLightEffect', LightEffect)
 RandomLightEffect = light_ns.class_('RandomLightEffect', LightEffect)
 LambdaLightEffect = light_ns.class_('LambdaLightEffect', LightEffect)
 AutomationLightEffect = light_ns.class_('AutomationLightEffect', LightEffect)

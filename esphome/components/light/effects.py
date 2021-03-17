@@ -6,7 +6,7 @@ from esphome.const import CONF_NAME, CONF_LAMBDA, CONF_UPDATE_INTERVAL, CONF_TRA
     CONF_WHITE, CONF_ALPHA, CONF_INTENSITY, CONF_SPEED, CONF_WIDTH, CONF_NUM_LEDS, CONF_RANDOM, \
     CONF_SEQUENCE
 from esphome.util import Registry
-from .types import LambdaLightEffect, RandomLightEffect, StrobeLightEffect, \
+from .types import LambdaLightEffect, PulseLightEffect, RandomLightEffect, StrobeLightEffect, \
     StrobeLightEffectColor, LightColorValues, AddressableLightRef, AddressableLambdaLightEffect, \
     FlickerLightEffect, AddressableRainbowLightEffect, AddressableColorWipeEffect, \
     AddressableColorWipeEffectColor, AddressableScanEffect, AddressableTwinkleEffect, \
@@ -103,7 +103,25 @@ def automation_effect_to_code(config, effect_id):
     yield var
 
 
+@register_rgb_effect('pulse', PulseLightEffect, "Pulse", {
+    cv.Optional(CONF_TRANSITION_LENGTH, default='7.5s'): cv.positive_time_period_milliseconds,
+    cv.Optional(CONF_UPDATE_INTERVAL, default='0.01s'): cv.positive_time_period_milliseconds,
+})
+@register_monochromatic_effect('pulse', PulseLightEffect, "Pulse", {
+    cv.Optional(CONF_TRANSITION_LENGTH, default='7.5s'): cv.positive_time_period_milliseconds,
+    cv.Optional(CONF_UPDATE_INTERVAL, default='0.01s'): cv.positive_time_period_milliseconds,
+})
+def pulse_effect_to_code(config, effect_id):
+    effect = cg.new_Pvariable(effect_id, config[CONF_NAME])
+    cg.add(effect.set_transition_length(config[CONF_TRANSITION_LENGTH]))
+    cg.add(effect.set_update_interval(config[CONF_UPDATE_INTERVAL]))
+    yield effect
+
 @register_rgb_effect('random', RandomLightEffect, "Random", {
+    cv.Optional(CONF_TRANSITION_LENGTH, default='7.5s'): cv.positive_time_period_milliseconds,
+    cv.Optional(CONF_UPDATE_INTERVAL, default='10s'): cv.positive_time_period_milliseconds,
+})
+@register_monochromatic_effect('random', RandomLightEffect, "Random", {
     cv.Optional(CONF_TRANSITION_LENGTH, default='7.5s'): cv.positive_time_period_milliseconds,
     cv.Optional(CONF_UPDATE_INTERVAL, default='10s'): cv.positive_time_period_milliseconds,
 })
