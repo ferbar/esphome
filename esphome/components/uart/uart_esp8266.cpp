@@ -4,9 +4,17 @@
 #include "esphome/core/helpers.h"
 #include "esphome/core/application.h"
 #include "esphome/core/defines.h"
-#
+#include "esphome/core/application.h"
+
+#ifdef USE_LOGGER
+#include "esphome/components/logger/logger.h"
+#endif
+
 namespace esphome {
 namespace uart {
+
+bool UARTComponent::SerialInUse = false;
+bool UARTComponent::Serial1InUse = false;
 
 static const char *const TAG = "uart_esp8266";
 uint32_t UARTComponent::get_config() {
@@ -49,19 +57,103 @@ void UARTComponent::setup() {
   // is 1 we still want to use Serial.
   SerialConfig config = static_cast<SerialConfig>(get_config());
 
-  if (this->tx_pin_.value_or(1) == 1 && this->rx_pin_.value_or(3) == 3) {
-    this->hw_serial_ = &Serial;
-    this->hw_serial_->begin(this->baud_rate_, config);
-    this->hw_serial_->setRxBufferSize(this->rx_buffer_size_);
-  } else if (this->tx_pin_.value_or(15) == 15 && this->rx_pin_.value_or(13) == 13) {
-    this->hw_serial_ = &Serial;
-    this->hw_serial_->begin(this->baud_rate_, config);
-    this->hw_serial_->setRxBufferSize(this->rx_buffer_size_);
-    this->hw_serial_->swap();
+  HardwareSerial *tryHwSerial = nullptr;
+  optional<uint8_t> tx_pin;
+  optional<uint8_t> rx_pin;
+  bool swapHwSerial=false;
+
+  // determine which hardware uart we might be able to use:
+  if (this->tx_pin_.value_or(1) == 1 && this->rx_pin_.value_or(3) == 3 ) {
+    tryHwSerial = &Serial;
+	tx_pin=1;
+    rx_pin=3;
+  } else if (this->tx_pin_.value_or(15) == 15 && this->rx_pin_.value_or(13) == 13 ) {
+    tryHwSerial = &Serial;
+	tx_pin=15;
+    rx_pin=13;
+    swapHwSerial=true;
   } else if (this->tx_pin_.value_or(2) == 2 && this->rx_pin_.value_or(8) == 8) {
-    this->hw_serial_ = &Serial1;
+    tryHwSerial = &Serial1;
+    tx_pin=2;
+    rx_pin=8;
+  }
+
+  bool useHardwareUart=tryHwSerial != nullptr;
+#ifdef USE_LOGGER
+// logger using same serial as we are trying:
+  uint8_t loggerTx;
+  if(tryHwSerial == logger::global_logger->get_hw_serial() ) {
+    useHardwareUart = false;
+  }
+// Check if logger is using same pins as we are trying to. There is no function to get the used pins from a HardwareSerial object.
+  if(logger::global_logger->get_hw_serial() == &Serial) {
+      // UART0
+      if(! ( IOSWAP & (1 << IOSWAPU0))) {
+        // default RX / TX GPIOs
+        loggerTx = 1;
+      } else {
+        loggerTx = 15;
+      }
+  } else {
+      // UART1
+      loggerTx = 2;
+  }
+#warning checking tx only, logger is never reading data, should initialize hwserial with tx pin only
+#warning here: https://github.com/esphome/esphome/blob/dev/esphome/components/logger/logger.cpp#L148
+// check_logger_conflict_ dup code!
+  if(this->tx_pin_.value_or(-1) == loggerTx || this->rx_pin_.value_or(-1) == loggerTx) {
+      ESP_LOGE(TAG, "  You're using the same serial port pins for logging and the UART component: tx: GPIO%02d, rx: GPIO%02d ."
+                    "Please disable logging over the serial port by setting logger->baud_rate to 0 or change the pins", this->tx_pin_.value_or(-1), this->rx_pin_.value_or(-1));
+	  this->mark_failed();
+	  return;
+  }
+#endif
+
+// check if other UART components are using this uart
+  if(useHardwareUart && tryHwSerial == &Serial && this->SerialInUse) {
+     ESP_LOGCONFIG(TAG, "==== another UARTComponent is already using UART0, using software UART");
+	 useHardwareUart=false;
+  }
+  if(useHardwareUart && tryHwSerial == &Serial1 && this->Serial1InUse) {
+     ESP_LOGCONFIG(TAG, "==== another UARTComponent is already using UART1, using software UART");
+	 useHardwareUart=false;
+  }
+/*
+// check if other UART components are using this pins / uart
+// not working: no access to App.components_ + no dynamic_cast
+  for (auto *comp : App.components_) {
+     UARTComponent *uartComponent = dynamic_cast<UARTComponent*>(comp);
+     ESP_LOGD(TAG, " checking components config: TX Pin: GPIO%02d RX Pin: GPIO%02d", uartComponent->tx_pin_.value_or(-1), uartComponent->rx_pin_.value_or(-1));
+	 if(uartComponent) {
+       if (uartComponent->hw_serial_ == tryHwSerial) {
+	     useHardwareUart=false;
+       }
+	   if (uartComponent->tx_pin_.has_value() && (uartComponent->tx_pin_== this->tx_pin_ || uartComponent->tx_pin_==this->rx_pin_) ) {
+         ESP_LOGE(TAG, "  Misconfiguration detected: conflicting TX pin detected: GPIO%02d." , uartComponent->tx_pin_);
+	     this->mark_failed();
+		 return;
+	   }
+	   if (uartComponent->rx_pin_.has_value() && (uartComponent->rx_pin_== this->tx_pin_ || uartComponent->rx_pin_==this->rx_pin_) ) {
+         ESP_LOGE(TAG, "  Misconfiguration detected: conflicting RX pin detected: GPIO%02d." , uartComponent->tx_pin_);
+	     this->mark_failed();
+		 return;
+	   }
+     }
+  }
+*/
+
+  if(useHardwareUart) {
+    ESP_LOGCONFIG(TAG, "====== using hardware UART TX: GPIO%02d RX: GPIO%02d", this->tx_pin_.value_or(-1), this->rx_pin_.value_or(-1));
+    this->hw_serial_ = tryHwSerial;
     this->hw_serial_->begin(this->baud_rate_, config);
     this->hw_serial_->setRxBufferSize(this->rx_buffer_size_);
+    if(swapHwSerial)
+      this->hw_serial_->swap();
+
+    if(tryHwSerial == &Serial)
+	  this->SerialInUse=true;
+    else
+	  this->Serial1InUse=true;
   } else {
     this->sw_serial_ = new ESP8266SoftwareSerial();
     int8_t tx = this->tx_pin_.has_value() ? *this->tx_pin_ : -1;

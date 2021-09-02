@@ -51,6 +51,7 @@ class ESP8266SoftwareSerial {
   UARTParityOptions parity_;
   ISRInternalGPIOPin *tx_pin_{nullptr};
   ISRInternalGPIOPin *rx_pin_{nullptr};
+
 };
 #endif
 
@@ -107,6 +108,8 @@ class UARTComponent : public Component, public Stream {
   HardwareSerial *hw_serial_{nullptr};
 #ifdef ARDUINO_ARCH_ESP8266
   ESP8266SoftwareSerial *sw_serial_{nullptr};
+  static bool SerialInUse;
+  static bool Serial1InUse;
 #endif
   optional<uint8_t> tx_pin_;
   optional<uint8_t> rx_pin_;
