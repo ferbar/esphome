@@ -19,7 +19,6 @@ from esphome.const import (
     CONF_ICON,
     CONF_ID,
     CONF_INVERTED,
-    CONF_LAST_RESET_TYPE,
     CONF_MAX_VALUE,
     CONF_MIN_VALUE,
     CONF_NAME,
@@ -38,12 +37,10 @@ from esphome.const import (
     DEVICE_CLASS_TEMPERATURE,
     ICON_BLUETOOTH,
     ICON_BLUR,
-    ICON_EMPTY,
     ICON_THERMOMETER,
-    LAST_RESET_TYPE_AUTO,
     STATE_CLASS_MEASUREMENT,
+    STATE_CLASS_TOTAL_INCREASING,
     UNIT_CELSIUS,
-    UNIT_EMPTY,
     UNIT_PERCENT,
     UNIT_WATT_HOURS,
 )
@@ -68,7 +65,7 @@ DemoClimate = demo_ns.class_("DemoClimate", climate.Climate, cg.Component)
 DemoClimateType = demo_ns.enum("DemoClimateType", is_class=True)
 DemoCover = demo_ns.class_("DemoCover", cover.Cover, cg.Component)
 DemoCoverType = demo_ns.enum("DemoCoverType", is_class=True)
-DemoFan = demo_ns.class_("DemoFan", cg.Component)
+DemoFan = demo_ns.class_("DemoFan", fan.Fan, cg.Component)
 DemoFanType = demo_ns.enum("DemoFanType", is_class=True)
 DemoLight = demo_ns.class_("DemoLight", light.LightOutput, cg.Component)
 DemoLightType = demo_ns.enum("DemoLightType", is_class=True)
@@ -336,12 +333,11 @@ CONFIG_SCHEMA = cv.Schema(
                     CONF_UNIT_OF_MEASUREMENT: UNIT_WATT_HOURS,
                     CONF_ACCURACY_DECIMALS: 0,
                     CONF_DEVICE_CLASS: DEVICE_CLASS_ENERGY,
-                    CONF_STATE_CLASS: STATE_CLASS_MEASUREMENT,
-                    CONF_LAST_RESET_TYPE: LAST_RESET_TYPE_AUTO,
+                    CONF_STATE_CLASS: STATE_CLASS_TOTAL_INCREASING,
                 },
             ],
         ): [
-            sensor.sensor_schema(UNIT_EMPTY, ICON_EMPTY, 0)
+            sensor.sensor_schema(accuracy_decimals=0)
             .extend(cv.polling_component_schema("60s"))
             .extend(
                 {
@@ -380,12 +376,8 @@ CONFIG_SCHEMA = cv.Schema(
                 },
             ],
         ): [
-            text_sensor.TEXT_SENSOR_SCHEMA.extend(
+            text_sensor.text_sensor_schema(klass=DemoTextSensor).extend(
                 cv.polling_component_schema("60s")
-            ).extend(
-                {
-                    cv.GenerateID(): cv.declare_id(DemoTextSensor),
-                }
             )
         ],
     }
@@ -413,8 +405,7 @@ async def to_code(config):
     for conf in config[CONF_FANS]:
         var = cg.new_Pvariable(conf[CONF_OUTPUT_ID])
         await cg.register_component(var, conf)
-        fan_ = await fan.create_fan_state(conf)
-        cg.add(var.set_fan(fan_))
+        await fan.register_fan(var, conf)
         cg.add(var.set_type(conf[CONF_TYPE]))
 
     for conf in config[CONF_LIGHTS]:
@@ -446,6 +437,5 @@ async def to_code(config):
         await switch.register_switch(var, conf)
 
     for conf in config[CONF_TEXT_SENSORS]:
-        var = cg.new_Pvariable(conf[CONF_ID])
+        var = await text_sensor.new_text_sensor(conf)
         await cg.register_component(var, conf)
-        await text_sensor.register_text_sensor(var, conf)
