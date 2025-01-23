@@ -1,5 +1,6 @@
 #include "wifi_component.h"
 
+#ifdef USE_WIFI
 #ifdef USE_ESP_IDF
 
 #include <esp_event.h>
@@ -15,7 +16,11 @@
 #include <cinttypes>
 #include <utility>
 #ifdef USE_WIFI_WPA2_EAP
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+#include <esp_eap_client.h>
+#else
 #include <esp_wpa2.h>
+#endif
 #endif
 
 #ifdef USE_WIFI_AP
@@ -125,12 +130,11 @@ void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, voi
 }
 
 void WiFiComponent::wifi_pre_setup_() {
-#ifdef USE_ESP32_IGNORE_EFUSE_MAC_CRC
   uint8_t mac[6];
-  get_mac_address_raw(mac);
-  set_mac_address(mac);
-  ESP_LOGV(TAG, "Use EFuse MAC without checking CRC: %s", get_mac_address_pretty().c_str());
-#endif
+  if (has_custom_mac_address()) {
+    get_mac_address_raw(mac);
+    set_mac_address(mac);
+  }
   esp_err_t err = esp_netif_init();
   if (err != ERR_OK) {
     ESP_LOGE(TAG, "esp_netif_init failed: %s", esp_err_to_name(err));
@@ -285,8 +289,16 @@ bool WiFiComponent::wifi_sta_connect_(const WiFiAP &ap) {
   // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/network/esp_wifi.html#_CPPv417wifi_sta_config_t
   wifi_config_t conf;
   memset(&conf, 0, sizeof(conf));
-  strncpy(reinterpret_cast<char *>(conf.sta.ssid), ap.get_ssid().c_str(), sizeof(conf.sta.ssid));
-  strncpy(reinterpret_cast<char *>(conf.sta.password), ap.get_password().c_str(), sizeof(conf.sta.password));
+  if (ap.get_ssid().size() > sizeof(conf.sta.ssid)) {
+    ESP_LOGE(TAG, "SSID is too long");
+    return false;
+  }
+  if (ap.get_password().size() > sizeof(conf.sta.password)) {
+    ESP_LOGE(TAG, "password is too long");
+    return false;
+  }
+  memcpy(reinterpret_cast<char *>(conf.sta.ssid), ap.get_ssid().c_str(), ap.get_ssid().size());
+  memcpy(reinterpret_cast<char *>(conf.sta.password), ap.get_password().c_str(), ap.get_password().size());
 
   // The weakest authmode to accept in the fast scan mode
   if (ap.get_password().empty()) {
@@ -364,48 +376,78 @@ bool WiFiComponent::wifi_sta_connect_(const WiFiAP &ap) {
   if (ap.get_eap().has_value()) {
     // note: all certificates and keys have to be null terminated. Lengths are appended by +1 to include \0.
     EAPAuth eap = ap.get_eap().value();
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+    err = esp_eap_client_set_identity((uint8_t *) eap.identity.c_str(), eap.identity.length());
+#else
     err = esp_wifi_sta_wpa2_ent_set_identity((uint8_t *) eap.identity.c_str(), eap.identity.length());
+#endif
     if (err != ESP_OK) {
-      ESP_LOGV(TAG, "esp_wifi_sta_wpa2_ent_set_identity failed! %d", err);
+      ESP_LOGV(TAG, "set_identity failed %d", err);
     }
     int ca_cert_len = strlen(eap.ca_cert);
     int client_cert_len = strlen(eap.client_cert);
     int client_key_len = strlen(eap.client_key);
     if (ca_cert_len) {
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+      err = esp_eap_client_set_ca_cert((uint8_t *) eap.ca_cert, ca_cert_len + 1);
+#else
       err = esp_wifi_sta_wpa2_ent_set_ca_cert((uint8_t *) eap.ca_cert, ca_cert_len + 1);
+#endif
       if (err != ESP_OK) {
-        ESP_LOGV(TAG, "esp_wifi_sta_wpa2_ent_set_ca_cert failed! %d", err);
+        ESP_LOGV(TAG, "set_ca_cert failed %d", err);
       }
     }
     // workout what type of EAP this is
     // validation is not required as the config tool has already validated it
     if (client_cert_len && client_key_len) {
       // if we have certs, this must be EAP-TLS
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+      err = esp_eap_client_set_certificate_and_key((uint8_t *) eap.client_cert, client_cert_len + 1,
+                                                   (uint8_t *) eap.client_key, client_key_len + 1,
+                                                   (uint8_t *) eap.password.c_str(), strlen(eap.password.c_str()));
+#else
       err = esp_wifi_sta_wpa2_ent_set_cert_key((uint8_t *) eap.client_cert, client_cert_len + 1,
                                                (uint8_t *) eap.client_key, client_key_len + 1,
                                                (uint8_t *) eap.password.c_str(), strlen(eap.password.c_str()));
+#endif
       if (err != ESP_OK) {
-        ESP_LOGV(TAG, "esp_wifi_sta_wpa2_ent_set_cert_key failed! %d", err);
+        ESP_LOGV(TAG, "set_cert_key failed %d", err);
       }
     } else {
       // in the absence of certs, assume this is username/password based
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+      err = esp_eap_client_set_username((uint8_t *) eap.username.c_str(), eap.username.length());
+#else
       err = esp_wifi_sta_wpa2_ent_set_username((uint8_t *) eap.username.c_str(), eap.username.length());
+#endif
       if (err != ESP_OK) {
-        ESP_LOGV(TAG, "esp_wifi_sta_wpa2_ent_set_username failed! %d", err);
+        ESP_LOGV(TAG, "set_username failed %d", err);
       }
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+      err = esp_eap_client_set_password((uint8_t *) eap.password.c_str(), eap.password.length());
+#else
       err = esp_wifi_sta_wpa2_ent_set_password((uint8_t *) eap.password.c_str(), eap.password.length());
+#endif
       if (err != ESP_OK) {
-        ESP_LOGV(TAG, "esp_wifi_sta_wpa2_ent_set_password failed! %d", err);
+        ESP_LOGV(TAG, "set_password failed %d", err);
       }
       // set TTLS Phase 2, defaults to MSCHAPV2
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+      err = esp_eap_client_set_ttls_phase2_method(eap.ttls_phase_2);
+#else
       err = esp_wifi_sta_wpa2_ent_set_ttls_phase2_method(eap.ttls_phase_2);
+#endif
       if (err != ESP_OK) {
-        ESP_LOGV(TAG, "esp_wifi_sta_wpa2_ent_set_ttls_phase2_method failed! %d", err);
+        ESP_LOGV(TAG, "set_ttls_phase2_method failed %d", err);
       }
     }
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+    err = esp_wifi_sta_enterprise_enable();
+#else
     err = esp_wifi_sta_wpa2_ent_enable();
+#endif
     if (err != ESP_OK) {
-      ESP_LOGV(TAG, "esp_wifi_sta_wpa2_ent_enable failed! %d", err);
+      ESP_LOGV(TAG, "enterprise_enable failed %d", err);
     }
   }
 #endif  // USE_WIFI_WPA2_EAP
@@ -868,7 +910,11 @@ bool WiFiComponent::wifi_start_ap_(const WiFiAP &ap) {
 
   wifi_config_t conf;
   memset(&conf, 0, sizeof(conf));
-  strncpy(reinterpret_cast<char *>(conf.ap.ssid), ap.get_ssid().c_str(), sizeof(conf.ap.ssid));
+  if (ap.get_ssid().size() > sizeof(conf.ap.ssid)) {
+    ESP_LOGE(TAG, "AP SSID is too long");
+    return false;
+  }
+  memcpy(reinterpret_cast<char *>(conf.ap.ssid), ap.get_ssid().c_str(), ap.get_ssid().size());
   conf.ap.channel = ap.get_channel().value_or(1);
   conf.ap.ssid_hidden = ap.get_ssid().size();
   conf.ap.max_connection = 5;
@@ -879,7 +925,11 @@ bool WiFiComponent::wifi_start_ap_(const WiFiAP &ap) {
     *conf.ap.password = 0;
   } else {
     conf.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    strncpy(reinterpret_cast<char *>(conf.ap.password), ap.get_password().c_str(), sizeof(conf.ap.password));
+    if (ap.get_password().size() > sizeof(conf.ap.password)) {
+      ESP_LOGE(TAG, "AP password is too long");
+      return false;
+    }
+    memcpy(reinterpret_cast<char *>(conf.ap.password), ap.get_password().c_str(), ap.get_password().size());
   }
 
   // pairwise cipher of SoftAP, group cipher will be derived using this.
@@ -939,7 +989,7 @@ int8_t WiFiComponent::wifi_rssi() {
   }
   return info.rssi;
 }
-int32_t WiFiComponent::wifi_channel_() {
+int32_t WiFiComponent::get_wifi_channel() {
   uint8_t primary;
   wifi_second_chan_t second;
   esp_err_t err = esp_wifi_get_channel(&primary, &second);
@@ -976,3 +1026,4 @@ network::IPAddress WiFiComponent::wifi_dns_ip_(int num) {
 }  // namespace esphome
 
 #endif  // USE_ESP_IDF
+#endif
